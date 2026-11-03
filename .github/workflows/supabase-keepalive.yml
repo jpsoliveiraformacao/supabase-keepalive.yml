@@ -1,21 +1,25 @@
+# .github/workflows/supabase-keepalive.yml
+# Workflow de Keep-Alive para Bases de Dados Supabase (Free Tier)
+# Regista na tabela keepalive o timestamp exato ao minuto a cada execução.
+
 name: Supabase KeepAlive Ping
 
 on:
   schedule:
-    # Executa a cada 2 dias às 06:00 UTC (impede a suspensão de 7 dias do Supabase)
+    # Executa a cada 2 dias às 06:00 UTC (garante que nunca atinge a janela de 7 dias)
     - cron: '0 6 */2 * *'
   workflow_dispatch:
     inputs:
       reason:
         description: 'Motivo do ping manual'
         required: false
-        default: 'Verificação manual via GitHub'
+        default: 'Verificacao manual via GitHub'
 
 jobs:
   keepalive:
     runs-on: ubuntu-latest
     steps:
-      - name: Executar Ping e Gravar Timestamp ao Minuto na Tabela keepalive
+      - name: Executar Ping e Gravar no Supabase (keepalive e ping_logs)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -25,9 +29,9 @@ jobs:
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           START_TIME=$(date +%s%3N)
 
-          echo "A enviar ping e gravar na tabela keepalive ($PROJECT_NAME)..."
-          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
-            -X POST "$SUPABASE_URL/rest/v1/keepalive" \
+          echo "1. A enviar ping e gravar na tabela keepalive ($PROJECT_NAME)..."
+          HTTP_STATUS=$(curl -s -o response_keepalive.json -w "%{http_code}" \
+            -X POST "$SUPABASE_URL/rest/v1/keepalive?on_conflict=project_name" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
             -H "Content-Type: application/json" \
@@ -36,13 +40,20 @@ jobs:
 
           END_TIME=$(date +%s%3N)
           LATENCY=$((END_TIME - START_TIME))
-          echo "Status recebido: HTTP $HTTP_STATUS em ${LATENCY}ms"
-          echo "Timestamp gravado: $TIMESTAMP"
+          echo "Status keepalive recebido: $HTTP_STATUS em ${LATENCY}ms"
+
+          echo "2. A registar no histórico de pings (ping_logs) para visualização imediata na app..."
+          curl -s -o response_log.json -w "\nStatus ping_logs: %{http_code}\n" \
+            -X POST "$SUPABASE_URL/rest/v1/ping_logs" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"monitor_name\": \"$PROJECT_NAME\", \"pinged_at\": \"$TIMESTAMP\", \"source\": \"github_action\", \"status_code\": 200, \"latency_ms\": $LATENCY, \"message\": \"Keep-Alive automático executado pelo GitHub Actions (#${{ github.run_number }})\", \"is_success\": true, \"github_run_id\": ${{ github.run_id }}, \"github_event\": \"${{ github.event_name }}\"}" || true
 
           if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
-            echo "KeepAlive gravado com sucesso na tabela keepalive!"
+            echo "KeepAlive e registo de log gravados com sucesso no Supabase!"
           else
-            echo "Aviso: Codigo HTTP $HTTP_STATUS ao gravar na tabela keepalive. Resposta:"
-            cat response.json || true
+            echo "Aviso: Codigo HTTP $HTTP_STATUS. Resposta:"
+            cat response_keepalive.json || true
             exit 1
           fi
