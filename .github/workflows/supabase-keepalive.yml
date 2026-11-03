@@ -1,0 +1,48 @@
+name: Supabase KeepAlive Ping
+
+on:
+  schedule:
+    # Executa a cada 2 dias às 06:00 UTC (impede a suspensão de 7 dias do Supabase)
+    - cron: '0 6 */2 * *'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Motivo do ping manual'
+        required: false
+        default: 'Verificação manual via GitHub'
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Executar Ping e Gravar Timestamp ao Minuto na Tabela keepalive
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          PROJECT_NAME: ${{ secrets.PROJECT_NAME || 'Ginasio' }}
+        run: |
+          echo "A obter data e hora UTC exata ao minuto..."
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          START_TIME=$(date +%s%3N)
+
+          echo "A enviar ping e gravar na tabela keepalive ($PROJECT_NAME)..."
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" \
+            -X POST "$SUPABASE_URL/rest/v1/keepalive" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: resolution=merge-duplicates" \
+            -d "{\"project_name\": \"$PROJECT_NAME\", \"last_ping\": \"$TIMESTAMP\", \"source\": \"github_action\", \"status\": \"healthy\"}")
+
+          END_TIME=$(date +%s%3N)
+          LATENCY=$((END_TIME - START_TIME))
+          echo "Status recebido: HTTP $HTTP_STATUS em ${LATENCY}ms"
+          echo "Timestamp gravado: $TIMESTAMP"
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+            echo "KeepAlive gravado com sucesso na tabela keepalive!"
+          else
+            echo "Aviso: Codigo HTTP $HTTP_STATUS ao gravar na tabela keepalive. Resposta:"
+            cat response.json || true
+            exit 1
+          fi
